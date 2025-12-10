@@ -8,9 +8,9 @@ import pytz
 import time
 
 # --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="LA SUPER PORRA: F1 2026", page_icon="🏎️", layout="wide")
+st.set_page_config(page_title="F1 2026 Manager", page_icon="🏎️", layout="wide")
 
-# Lista de Pilotos Oficial
+# Lista de Pilotos
 PILOTOS_2026 = [
     "Verstappen", "Hadjar", "Leclerc", "Hamilton", "Norris", "Piastri", 
     "Alonso", "Stroll", "Sainz", "Albon", "Russell", "Antonelli", 
@@ -26,12 +26,11 @@ if 'usuario_actual' not in st.session_state:
 if 'rol_usuario' not in st.session_state:
     st.session_state.rol_usuario = None
 if 'mis_ligas' not in st.session_state:
-    st.session_state.mis_ligas = []     # Lista de ligas (Plural)
-if 'mi_liga' not in st.session_state:
-    st.session_state.mi_liga = ""       # Variable auxiliar (Singular) - CORRECCIÓN DEL ERROR
+    st.session_state.mis_ligas = []
 
 # --- CONEXIONES ---
 def conectar_sheet():
+    """Conexión base sin caché para escrituras"""
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     creds_dict = st.secrets["gcp_service_account"]
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
@@ -52,68 +51,85 @@ def desencriptar(texto_encriptado):
     except:
         return "Error/Corrupto"
 
-# --- FUNCIONES DE USUARIOS Y LIGAS ---
+# --- FUNCIONES DE LECTURA OPTIMIZADAS (CACHÉ) ---
+# Aquí está la MAGIA. ttl=300 significa "recuerda esto 300 segundos (5 min)"
+# Así no molestamos a Google cada vez que haces clic.
 
-def obtener_todas_las_ligas_existentes():
+@st.cache_data(ttl=300)
+def obtener_datos_maestros():
+    """Descarga Calendario y Usuarios de una sola vez"""
     try:
         sh = conectar_sheet()
-        ws = sh.worksheet("usuarios")
-        df = pd.DataFrame(ws.get_all_records())
-        if df.empty or 'liga_privada' not in df.columns: return []
-        todas_ligas = []
-        for item in df['liga_privada'].astype(str):
-            partes = item.split(",")
-            for p in partes:
-                limpia = p.strip().upper()
-                if limpia: todas_ligas.append(limpia)
-        return list(set(todas_ligas))
-    except: return []
+        
+        # 1. Calendario
+        ws_cal = sh.worksheet("calendario")
+        df_cal = pd.DataFrame(ws_cal.get_all_records())
+        
+        # Procesar fechas del calendario aquí para no hacerlo en cada clic
+        madrid_tz = pytz.timezone('Europe/Madrid')
+        def parse_date(date_str):
+            try:
+                dt = datetime.strptime(str(date_str), "%d/%m/%Y %H:%M:%S")
+                return madrid_tz.localize(dt)
+            except:
+                try:
+                    dt = datetime.strptime(str(date_str), "%d/%m/%Y %H:%M")
+                    return madrid_tz.localize(dt)
+                except:
+                    return None
+        df_cal['fecha_dt'] = df_cal['fecha_limite'].apply(parse_date)
+
+        # 2. Usuarios
+        ws_users = sh.worksheet("usuarios")
+        df_users = pd.DataFrame(ws_users.get_all_records())
+        # Asegurar tipos de datos
+        if not df_users.empty:
+            df_users['usuario'] = df_users['usuario'].astype(str)
+            df_users['password'] = df_users['password'].astype(str)
+            if 'liga_privada' not in df_users.columns: df_users['liga_privada'] = ""
+        
+        return df_cal, df_users
+    except Exception as e:
+        # Si falla Google, devolvemos DataFrames vacíos para que no pete la app
+        return pd.DataFrame(), pd.DataFrame()
+
+@st.cache_data(ttl=60) # Resultados y apuestas se actualizan cada 1 minuto
+def obtener_datos_resultados():
+    """Descarga Resultados y Apuestas"""
+    try:
+        sh = conectar_sheet()
+        df_res = pd.DataFrame(sh.worksheet("resultados_oficiales").get_all_records())
+        df_bets_c = pd.DataFrame(sh.worksheet("pronosticos_carrera").get_all_records())
+        df_bets_m = pd.DataFrame(sh.worksheet("pronosticos_mundial").get_all_records())
+        return df_res, df_bets_c, df_bets_m
+    except:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+# --- FUNCIONES DE ESCRITURA (NO TIENEN CACHÉ) ---
+# Estas siguen llamando a Google directo porque necesitamos guardar YA.
 
 def registrar_usuario_nuevo(user, password, liga_input):
     nombre_liga = liga_input.strip().upper() if liga_input else ""
     try:
-        sh = conectar_sheet()
-        ws = sh.worksheet("usuarios")
-        df_users = pd.DataFrame(ws.get_all_records())
+        # Para verificar duplicados usamos la caché (rápido)
+        _, df_users = obtener_datos_maestros() 
         
         if not df_users.empty:
             usuarios_existentes = df_users['usuario'].astype(str).tolist()
             if user in usuarios_existentes:
                 return False, "⚠️ Ese nombre de usuario ya existe."
         
-        # Guardamos siempre como PENDIENTE
+        # Para escribir usamos conexión directa
+        sh = conectar_sheet()
+        ws = sh.worksheet("usuarios")
         ws.append_row([user, password, "pendiente", nombre_liga])
+        
+        # Limpiamos caché para que el nuevo usuario aparezca si recargas
+        obtener_datos_maestros.clear()
         return True, "✅ Solicitud enviada. Espera aprobación del Admin."
         
     except Exception as e:
         return False, f"Error del sistema: {e}"
-
-def verificar_login(user, password):
-    try:
-        sh = conectar_sheet()
-        ws = sh.worksheet("usuarios")
-        df_users = pd.DataFrame(ws.get_all_records())
-        
-        df_users['usuario'] = df_users['usuario'].astype(str)
-        df_users['password'] = df_users['password'].astype(str)
-        if 'liga_privada' not in df_users.columns: df_users['liga_privada'] = ""
-        
-        usuario_encontrado = df_users[df_users['usuario'] == user]
-        
-        if not usuario_encontrado.empty:
-            password_real = usuario_encontrado.iloc[0]['password']
-            if str(password) == password_real:
-                rol = usuario_encontrado.iloc[0]['rol']
-                
-                if rol == "pendiente":
-                    return False, "pendiente", []
-                
-                ligas_str = str(usuario_encontrado.iloc[0]['liga_privada'])
-                lista_ligas = [l.strip().upper() for l in ligas_str.split(",") if l.strip()]
-                return True, rol, lista_ligas
-        return False, None, []
-    except:
-        return False, None, []
 
 def unirse_a_nueva_liga(usuario, nueva_liga):
     nombre_clean = nueva_liga.strip().upper()
@@ -130,6 +146,8 @@ def unirse_a_nueva_liga(usuario, nueva_liga):
         lista_actual.append(nombre_clean)
         nuevo_valor = ", ".join(lista_actual)
         ws.update_cell(cell.row, 4, nuevo_valor)
+        
+        obtener_datos_maestros.clear() # Limpiar caché
         return True, "¡Unido con éxito!"
     except Exception as e:
         return False, f"Error: {e}"
@@ -139,7 +157,8 @@ def aprobar_usuario(usuario_a_aprobar):
         sh = conectar_sheet()
         ws = sh.worksheet("usuarios")
         cell = ws.find(usuario_a_aprobar)
-        ws.update_cell(cell.row, 3, "user") 
+        ws.update_cell(cell.row, 3, "user")
+        obtener_datos_maestros.clear()
         return True
     except: return False
 
@@ -149,28 +168,50 @@ def borrar_usuario(usuario_a_borrar):
         ws = sh.worksheet("usuarios")
         cell = ws.find(usuario_a_borrar)
         ws.delete_rows(cell.row)
+        obtener_datos_maestros.clear()
         return True
     except: return False
 
-# --- LÓGICA DE JUEGO ---
-def obtener_calendario():
-    sh = conectar_sheet()
-    ws = sh.worksheet("calendario")
-    df = pd.DataFrame(ws.get_all_records())
-    madrid_tz = pytz.timezone('Europe/Madrid')
-    
-    def parse_date(date_str):
-        try:
-            dt = datetime.strptime(str(date_str), "%d/%m/%Y %H:%M:%S")
-            return madrid_tz.localize(dt)
-        except:
-            try:
-                dt = datetime.strptime(str(date_str), "%d/%m/%Y %H:%M")
-                return madrid_tz.localize(dt)
-            except:
-                return None
-    df['fecha_dt'] = df['fecha_limite'].apply(parse_date)
-    return df
+def guardar_apuesta(usuario, id_evento, cadena_encriptada, tipo_apuesta):
+    try:
+        sh = conectar_sheet()
+        if tipo_apuesta == "mundial":
+            ws = sh.worksheet("pronosticos_mundial")
+        else:
+            ws = sh.worksheet("pronosticos_carrera")
+            
+        ws.append_row([usuario, id_evento, str(datetime.now()), cadena_encriptada])
+        obtener_datos_resultados.clear() # Limpiar caché de resultados
+        return True
+    except: return False
+
+def guardar_resultado_oficial(fila_datos):
+    try:
+        sh = conectar_sheet()
+        ws = sh.worksheet("resultados_oficiales")
+        ws.append_row(fila_datos)
+        obtener_datos_resultados.clear()
+        return True
+    except: return False
+
+# --- LÓGICA DE NEGOCIO ---
+
+def verificar_login(user, password):
+    # Usamos datos cacheados para login rápido
+    _, df_users = obtener_datos_maestros()
+    try:
+        usuario_encontrado = df_users[df_users['usuario'] == user]
+        if not usuario_encontrado.empty:
+            password_real = usuario_encontrado.iloc[0]['password']
+            if str(password) == password_real:
+                rol = usuario_encontrado.iloc[0]['rol']
+                if rol == "pendiente": return False, "pendiente", []
+                
+                ligas_str = str(usuario_encontrado.iloc[0]['liga_privada'])
+                lista_ligas = [l.strip().upper() for l in ligas_str.split(",") if l.strip()]
+                return True, rol, lista_ligas
+        return False, None, []
+    except: return False, None, []
 
 def verificar_estado_evento(id_evento, df_calendario):
     idx_evento = df_calendario.index[df_calendario['id_evento'] == id_evento].tolist()
@@ -214,7 +255,7 @@ def calcular_puntos_mundial(prediccion_lista, resultado_lista):
 #              INTERFAZ DE ACCESO
 # ==========================================
 if not st.session_state.logged_in:
-    st.title("🏎️ LA SUPER PORRA: F1 2026")
+    st.title("🏎️ F1 2026 Manager")
     
     tab_login, tab_registro = st.tabs(["🔑 Iniciar Sesión", "📝 Registrarse"])
     
@@ -245,11 +286,22 @@ if not st.session_state.logged_in:
         col_liga1, col_liga2 = st.columns([3, 1])
         with col_liga1:
             r_liga = st.text_input("Liga Inicial (Opcional)", key="r_l")
-            st.caption("Podrás unirte a más ligas después.")
         
         if r_liga:
             nombre_limpio = r_liga.strip().upper()
-            todas_ligas = obtener_todas_las_ligas_existentes()
+            # Usamos caché para comprobar ligas existentes
+            df_cal, df_users = obtener_datos_maestros()
+            
+            # Obtener ligas únicas del caché
+            todas_ligas = []
+            if not df_users.empty and 'liga_privada' in df_users.columns:
+                 for item in df_users['liga_privada'].astype(str):
+                    partes = item.split(",")
+                    for p in partes:
+                        limpia = p.strip().upper()
+                        if limpia: todas_ligas.append(limpia)
+            todas_ligas = list(set(todas_ligas))
+
             if nombre_limpio in todas_ligas:
                 st.info(f"👥 Te unirás a: **{nombre_limpio}**")
             else:
@@ -266,6 +318,12 @@ if not st.session_state.logged_in:
 #              APP PRINCIPAL
 # ==========================================
 else:
+    # Cargar datos maestros (Calendario y usuarios) de la caché
+    df_cal, df_users = obtener_datos_maestros()
+    if df_cal.empty:
+        st.error("Error crítico: No se pudo conectar con la base de datos. Intenta recargar.")
+        st.stop()
+
     # --- BARRA LATERAL ---
     with st.sidebar:
         st.markdown(f"## 👤 {st.session_state.usuario_actual}")
@@ -287,7 +345,7 @@ else:
                     ok, msg = unirse_a_nueva_liga(st.session_state.usuario_actual, nueva_liga_input)
                     if ok:
                         st.success(msg)
-                        time.sleep(1)
+                        # Actualizar caché y recargar
                         st.rerun() 
                     else:
                         st.error(msg)
@@ -299,8 +357,6 @@ else:
             st.rerun()
 
     st.title("🏆 Porra F1 2026")
-    try: df_cal = obtener_calendario()
-    except: st.error("Error calendario."); st.stop()
 
     # --- DEFINICIÓN DE PESTAÑAS ---
     tabs_list = ["📝 Hacer Porra", "📊 Clasificación", "📜 Normas"]
@@ -314,7 +370,16 @@ else:
     with tabs[0]:
         st.subheader("Tu predicción")
         lista_eventos = df_cal['nombre_mostrar'].tolist()
-        evento_seleccionado_nombre = st.selectbox("Gran Premio:", lista_eventos)
+        
+        # Intentar preseleccionar el primer evento ABIERTO o PENDIENTE
+        idx_defecto = 0
+        for i, row in df_cal.iterrows():
+            estado_temp = verificar_estado_evento(row['id_evento'], df_cal)
+            if estado_temp == "ABIERTO":
+                idx_defecto = i
+                break
+        
+        evento_seleccionado_nombre = st.selectbox("Gran Premio:", lista_eventos, index=idx_defecto)
         row_evento = df_cal[df_cal['nombre_mostrar'] == evento_seleccionado_nombre].iloc[0]
         id_evento = row_evento['id_evento']
         estado = verificar_estado_evento(id_evento, df_cal)
@@ -330,10 +395,10 @@ else:
                     if st.button("Enviar Predicción Mundial"):
                         cadena = ",".join(seleccion)
                         encriptado = encriptar(cadena)
-                        sh = conectar_sheet()
-                        ws = sh.worksheet("pronosticos_mundial")
-                        ws.append_row([st.session_state.usuario_actual, id_evento, str(datetime.now()), encriptado])
-                        st.balloons(); st.success("✅ ¡Guardado!")
+                        ok = guardar_apuesta(st.session_state.usuario_actual, id_evento, encriptado, "mundial")
+                        if ok: 
+                            st.balloons(); st.success("✅ ¡Guardado!")
+                        else: st.error("Error al guardar")
                 else: st.caption(f"{len(seleccion)}/22 seleccionados")
             else:
                 st.write("Top 10 Carrera")
@@ -347,89 +412,84 @@ else:
                     if st.button("Enviar Porra"):
                         cadena = ",".join(seleccion_carrera)
                         encriptado = encriptar(cadena)
-                        sh = conectar_sheet()
-                        ws = sh.worksheet("pronosticos_carrera")
-                        ws.append_row([st.session_state.usuario_actual, id_evento, str(datetime.now()), encriptado])
-                        st.balloons(); st.success("✅ ¡Guardado!")
+                        ok = guardar_apuesta(st.session_state.usuario_actual, id_evento, encriptado, "carrera")
+                        if ok: 
+                            st.balloons(); st.success("✅ ¡Guardado!")
+                        else: st.error("Error al guardar")
                 else: st.warning("Completa los 10 sin repetir.")
 
-    # --- TAB 2: CLASIFICACIÓN (Con Modo Cotilla) ---
+    # --- TAB 2: CLASIFICACIÓN ---
     with tabs[1]:
         st.header("Clasificaciones")
-        if st.button("🔄 Refrescar"): st.rerun()
+        if st.button("🔄 Refrescar"):
+            obtener_datos_resultados.clear() # Forzar limpieza de caché
+            st.rerun()
         
-        sh = conectar_sheet()
-        ws_res = sh.worksheet("resultados_oficiales")
-        df_res = pd.DataFrame(ws_res.get_all_records())
-        ws_users = sh.worksheet("usuarios")
-        df_users = pd.DataFrame(ws_users.get_all_records())
-        df_users['usuario'] = df_users['usuario'].astype(str)
-        if 'liga_privada' not in df_users.columns: df_users['liga_privada'] = ""
-        
-        df_bets_c = pd.DataFrame(sh.worksheet("pronosticos_carrera").get_all_records())
-        df_bets_m = pd.DataFrame(sh.worksheet("pronosticos_mundial").get_all_records())
+        # Cargar datos de resultados y apuestas (Con caché de 1 min)
+        df_res, df_bets_c, df_bets_m = obtener_datos_resultados()
         
         ranking_global = {}
         
-        for index, row_res in df_res.iterrows():
-            carrera_id = row_res['carrera']
-            if not row_res['p1']: continue
-            
-            res_oficial = [row_res[f'p{i}'] for i in range(1, 23) if f'p{i}' in row_res and row_res[f'p{i}']]
-            
-            es_mundial = "mundial" in carrera_id
-            bets = df_bets_m[df_bets_m['tipo'] == carrera_id] if es_mundial else df_bets_c[df_bets_c['carrera'] == carrera_id]
-            
-            apuestas_del_gp = {} 
-            res_gp = []
-            
-            for idx, bet in bets.iterrows():
-                user = bet['usuario']
-                estado_ev = verificar_estado_evento(carrera_id, df_cal)
+        if not df_res.empty:
+            for index, row_res in df_res.iterrows():
+                carrera_id = row_res['carrera']
+                if not row_res['p1']: continue
                 
-                if estado_ev == "CERRADO":
-                    pred_str = desencriptar(bet['datos_encriptados'])
-                    if pred_str != "Error/Corrupto":
-                        pred_list = pred_str.split(",")
-                        apuestas_del_gp[user] = pred_list
-                        pts = calcular_puntos_mundial(pred_list, res_oficial) if es_mundial else calcular_puntos_carrera(pred_list, res_oficial)
-                        ranking_global[user] = ranking_global.get(user, 0) + pts
-                        res_gp.append({"Usuario": user, "Puntos": pts})
+                res_oficial = [row_res[f'p{i}'] for i in range(1, 23) if f'p{i}' in row_res and row_res[f'p{i}']]
+                es_mundial = "mundial" in carrera_id
+                
+                if es_mundial and not df_bets_m.empty:
+                    bets = df_bets_m[df_bets_m['tipo'] == carrera_id]
+                elif not es_mundial and not df_bets_c.empty:
+                    bets = df_bets_c[df_bets_c['carrera'] == carrera_id]
                 else:
-                    res_gp.append({"Usuario": user, "Puntos": "⏳"})
+                    bets = pd.DataFrame()
+                
+                apuestas_del_gp = {} 
+                res_gp = []
+                
+                if not bets.empty:
+                    for idx, bet in bets.iterrows():
+                        user = bet['usuario']
+                        estado_ev = verificar_estado_evento(carrera_id, df_cal)
+                        
+                        if estado_ev == "CERRADO":
+                            pred_str = desencriptar(bet['datos_encriptados'])
+                            if pred_str != "Error/Corrupto":
+                                pred_list = pred_str.split(",")
+                                apuestas_del_gp[user] = pred_list
+                                pts = calcular_puntos_mundial(pred_list, res_oficial) if es_mundial else calcular_puntos_carrera(pred_list, res_oficial)
+                                ranking_global[user] = ranking_global.get(user, 0) + pts
+                                res_gp.append({"Usuario": user, "Puntos": pts})
+                        else:
+                            res_gp.append({"Usuario": user, "Puntos": "⏳"})
 
-            with st.expander(f"🏁 Detalles: {carrera_id}"):
-                st.dataframe(pd.DataFrame(res_gp), use_container_width=True)
-                if apuestas_del_gp:
-                    st.caption("🕵️ Ver apuesta completa de:")
-                    usuarios_en_gp = list(apuestas_del_gp.keys())
-                    usuario_a_espiar = st.selectbox("Seleccionar:", ["-"] + usuarios_en_gp, key=f"spy_{carrera_id}")
-                    if usuario_a_espiar != "-":
-                        st.markdown(f"**Apuesta de {usuario_a_espiar}**")
-                        lista_apostada = apuestas_del_gp[usuario_a_espiar]
-                        data_comp = []
-                        rango = 22 if es_mundial else 10
-                        for i in range(rango):
-                            p_apostado = lista_apostada[i] if i < len(lista_apostada) else "-"
-                            p_real = res_oficial[i] if i < len(res_oficial) else "-"
-                            icon = "❌"
-                            if p_apostado == p_real: icon = "✅"
-                            elif p_apostado in res_oficial: icon = "⚠️"
-                            data_comp.append({"Pos": i+1, "Apuesta": p_apostado, "Real": p_real, "Estado": icon})
-                        st.dataframe(pd.DataFrame(data_comp), use_container_width=True)
+                with st.expander(f"🏁 Detalles: {carrera_id}"):
+                    st.dataframe(pd.DataFrame(res_gp), use_container_width=True)
+                    if apuestas_del_gp:
+                        st.caption("🕵️ Ver apuesta completa de:")
+                        usuarios_en_gp = list(apuestas_del_gp.keys())
+                        usuario_a_espiar = st.selectbox("Seleccionar:", ["-"] + usuarios_en_gp, key=f"spy_{carrera_id}")
+                        if usuario_a_espiar != "-":
+                            st.markdown(f"**Apuesta de {usuario_a_espiar}**")
+                            lista_apostada = apuestas_del_gp[usuario_a_espiar]
+                            data_comp = []
+                            rango = 22 if es_mundial else 10
+                            for i in range(rango):
+                                p_apostado = lista_apostada[i] if i < len(lista_apostada) else "-"
+                                p_real = res_oficial[i] if i < len(res_oficial) else "-"
+                                icon = "❌"
+                                if p_apostado == p_real: icon = "✅"
+                                elif p_apostado in res_oficial: icon = "⚠️"
+                                data_comp.append({"Pos": i+1, "Apuesta": p_apostado, "Real": p_real, "Estado": icon})
+                            st.dataframe(pd.DataFrame(data_comp), use_container_width=True)
 
         st.write("---")
         opciones = ["GLOBAL"] + st.session_state.mis_ligas
-        
-        # --- CORRECCIÓN DEL ERROR ---
-        # Si la lista 'mis_ligas' tiene cosas, usamos la primera por defecto. 
-        # Si no, usamos 'GLOBAL'.
         idx_defecto = 0
         if st.session_state.mis_ligas:
-            # Si hay ligas, intentamos seleccionar la primera de ellas
-            primera_liga = st.session_state.mis_ligas[0]
-            if primera_liga in opciones:
-                idx_defecto = opciones.index(primera_liga)
+             primera_liga = st.session_state.mis_ligas[0]
+             if primera_liga in opciones: idx_defecto = opciones.index(primera_liga)
         
         opcion_liga = st.selectbox("🏆 Filtrar Ranking por Liga:", opciones, index=idx_defecto)
         
@@ -474,22 +534,22 @@ else:
             ev_cargar = st.selectbox("Evento:", df_cal['id_evento'].tolist())
             res_admin = st.multiselect("Resultado Oficial:", PILOTOS_2026)
             if st.button("Guardar Resultado"):
-                sh = conectar_sheet()
-                ws_res = sh.worksheet("resultados_oficiales")
                 fila = [ev_cargar] + res_admin
                 while len(fila) < 23: fila.append("")
                 fila.append("TRUE")
-                ws_res.append_row(fila)
-                st.success("Guardado")
+                ok = guardar_resultado_oficial(fila)
+                if ok: st.success("Guardado")
+                else: st.error("Error al guardar")
 
     # --- TAB 5: ADMIN USUARIOS ---
     if st.session_state.rol_usuario == "admin":
         with tabs[4]:
             st.markdown("### 👥 Control de Acceso")
-            if st.button("🔄 Cargar Pendientes"): st.rerun()
-            sh = conectar_sheet()
-            ws_users = sh.worksheet("usuarios")
-            df_users = pd.DataFrame(ws_users.get_all_records())
+            if st.button("🔄 Cargar Pendientes"):
+                obtener_datos_maestros.clear()
+                st.rerun()
+            
+            # Usar df_users que ya cargamos arriba
             pendientes = df_users[df_users['rol'] == 'pendiente']
             if pendientes.empty:
                 st.success("✅ No hay solicitudes.")
