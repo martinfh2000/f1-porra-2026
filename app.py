@@ -355,11 +355,14 @@ else:
         id_evento = row_evento['id_evento']
         estado = verificar_estado_evento(id_evento, df_cal)
         
-        # --- NUEVA FUNCIONALIDAD: VER MI APUESTA ACTUAL ---
+        # --- CARGAR APUESTA ANTERIOR ---
         _, df_bets_c, df_bets_m = obtener_datos_resultados()
         mi_apuesta_actual = []
         
-        if "mundial" in id_evento:
+        # Detectar si es mundial o carrera para buscar en el sitio correcto
+        es_mundial = "mundial" in id_evento
+        
+        if es_mundial:
             if not df_bets_m.empty:
                 mi_fila = df_bets_m[(df_bets_m['usuario'] == st.session_state.usuario_actual) & (df_bets_m['tipo'] == id_evento)]
                 if not mi_fila.empty:
@@ -372,19 +375,30 @@ else:
                     datos = mi_fila.iloc[-1]['datos_encriptados']
                     mi_apuesta_actual = desencriptar(datos).split(",")
 
+        # --- MOSTRAR AVISO VISUAL SI YA EXISTE ---
         if mi_apuesta_actual:
-            with st.expander("✅ Ya tienes una apuesta guardada para este evento (Click para ver)", expanded=True):
-                st.info(f"**Tu apuesta guardada:** {', '.join(mi_apuesta_actual)}")
-                st.caption("Si usas el formulario de abajo y envías de nuevo, se actualizará tu predicción.")
-        # ----------------------------------------------------
+            with st.expander("✅ Ya tienes una apuesta guardada (Click para ver)", expanded=True):
+                if es_mundial:
+                    # Mostrar tabla bonita para el Mundial
+                    df_mi_apuesta = pd.DataFrame(mi_apuesta_actual, columns=["Piloto"])
+                    df_mi_apuesta.index += 1
+                    st.dataframe(df_mi_apuesta, height=300)
+                else:
+                    # Mostrar texto simple para Carrera
+                    st.info(f"**Top 10 guardado:** {', '.join(mi_apuesta_actual)}")
+                st.caption("Si usas el formulario de abajo, se actualizará tu predicción.")
         
         if estado == 'CERRADO': st.warning(f"🔒 CERRADO (Límite: {row_evento['fecha_limite']})")
         elif estado == 'PENDIENTE': st.info("⏳ PENDIENTE")
         else:
             st.success(f"🟢 ABIERTO hasta: {row_evento['fecha_limite']}")
-            if "mundial" in id_evento:
+            if es_mundial:
                 st.write("Ordena los 22 pilotos.")
-                seleccion = st.multiselect("Parrilla:", PILOTOS_2026, default=None)
+                # PRE-RELLENADO: Usamos la apuesta anterior como 'default' si existe
+                default_value = mi_apuesta_actual if mi_apuesta_actual else None
+                
+                seleccion = st.multiselect("Parrilla:", PILOTOS_2026, default=default_value)
+                
                 if len(seleccion) == 22:
                     if st.button("Enviar Predicción Mundial"):
                         cadena = ",".join(seleccion)
@@ -399,8 +413,17 @@ else:
                 seleccion_carrera = []
                 for i in range(10):
                     with cols[i % 2]:
-                        val = st.selectbox(f"P{i+1}", ["-"] + PILOTOS_2026, key=f"p{i}")
+                        # PRE-RELLENADO: Buscamos el índice del piloto guardado
+                        idx_piloto = 0 # Por defecto "-"
+                        if mi_apuesta_actual and i < len(mi_apuesta_actual):
+                            piloto_guardado = mi_apuesta_actual[i]
+                            lista_completa = ["-"] + PILOTOS_2026
+                            if piloto_guardado in lista_completa:
+                                idx_piloto = lista_completa.index(piloto_guardado)
+                        
+                        val = st.selectbox(f"P{i+1}", ["-"] + PILOTOS_2026, index=idx_piloto, key=f"p{i}")
                         seleccion_carrera.append(val)
+                        
                 if "-" not in seleccion_carrera and len(set(seleccion_carrera)) == 10:
                     if st.button("Enviar Porra"):
                         cadena = ",".join(seleccion_carrera)
@@ -425,10 +448,10 @@ else:
                 carrera_id = row_res['carrera']
                 if not row_res['p1']: continue
                 res_oficial = [row_res[f'p{i}'] for i in range(1, 23) if f'p{i}' in row_res and row_res[f'p{i}']]
-                es_mundial = "mundial" in carrera_id
+                es_mundial_res = "mundial" in carrera_id
                 
-                if es_mundial and not df_bets_m.empty: bets = df_bets_m[df_bets_m['tipo'] == carrera_id]
-                elif not es_mundial and not df_bets_c.empty: bets = df_bets_c[df_bets_c['carrera'] == carrera_id]
+                if es_mundial_res and not df_bets_m.empty: bets = df_bets_m[df_bets_m['tipo'] == carrera_id]
+                elif not es_mundial_res and not df_bets_c.empty: bets = df_bets_c[df_bets_c['carrera'] == carrera_id]
                 else: bets = pd.DataFrame()
                 
                 apuestas_del_gp = {} 
@@ -442,7 +465,7 @@ else:
                             if pred_str != "Error/Corrupto":
                                 pred_list = pred_str.split(",")
                                 apuestas_del_gp[user] = pred_list
-                                pts = calcular_puntos_mundial(pred_list, res_oficial) if es_mundial else calcular_puntos_carrera(pred_list, res_oficial)
+                                pts = calcular_puntos_mundial(pred_list, res_oficial) if es_mundial_res else calcular_puntos_carrera(pred_list, res_oficial)
                                 ranking_global[user] = ranking_global.get(user, 0) + pts
                                 res_gp.append({"Usuario": user, "Puntos": pts})
                         else: res_gp.append({"Usuario": user, "Puntos": "⏳"})
@@ -457,7 +480,7 @@ else:
                             st.markdown(f"**Apuesta de {usuario_a_espiar}**")
                             lista_apostada = apuestas_del_gp[usuario_a_espiar]
                             data_comp = []
-                            rango = 22 if es_mundial else 10
+                            rango = 22 if es_mundial_res else 10
                             for i in range(rango):
                                 p_apostado = lista_apostada[i] if i < len(lista_apostada) else "-"
                                 p_real = res_oficial[i] if i < len(res_oficial) else "-"
