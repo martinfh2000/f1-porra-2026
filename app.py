@@ -537,7 +537,7 @@ else:
         st.markdown("""
         ### 1. Formato
         * **Confidencialidad:** Las porras son ciegas hasta el cierre.
-        * **Plazos:** Cierre automático antes de la sesión oficial.
+        * **Plazos:** Cierre automático antes de la sesión oficial. Puedes repetir cada una cuantas veces quieras, solo se guarda la ultima apuesta.
         
         ### 2. Puntuación
         **Carrera (Top 10):**
@@ -584,4 +584,5 @@ else:
                     if c3.button("✅", key=f"ok_{row['usuario']}"):
                         aprobar_usuario(row['usuario']); st.rerun()
                     if c4.button("❌", key=f"del_{row['usuario']}"):
+
                         borrar_usuario(row['usuario']); st.rerun()
