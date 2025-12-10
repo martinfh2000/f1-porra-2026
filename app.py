@@ -180,10 +180,33 @@ def guardar_apuesta(usuario, id_evento, cadena_encriptada, tipo_apuesta):
         else:
             ws = sh.worksheet("pronosticos_carrera")
             
-        ws.append_row([usuario, id_evento, str(datetime.now()), cadena_encriptada])
-        obtener_datos_resultados.clear() # Limpiar caché de resultados
+        # 1. Buscamos si el usuario ya tiene una fila para este evento
+        # Traemos todos los datos para buscar en memoria (ahorra llamadas a la API)
+        data = ws.get_all_values()
+        
+        fila_encontrada = -1
+        
+        # Empezamos en 1 para saltar encabezados (index 0 en python es fila 1 en excel)
+        # data[i][0] es usuario, data[i][1] es id_evento
+        for i in range(1, len(data)):
+            if data[i][0] == usuario and data[i][1] == id_evento:
+                fila_encontrada = i + 1 # +1 porque Excel cuenta desde 1
+                break
+        
+        if fila_encontrada > 0:
+            # --- MODO ACTUALIZAR (UPDATE) ---
+            # Columna 3: Timestamp, Columna 4: Datos
+            ws.update_cell(fila_encontrada, 3, str(datetime.now()))
+            ws.update_cell(fila_encontrada, 4, cadena_encriptada)
+        else:
+            # --- MODO NUEVO (INSERT) ---
+            ws.append_row([usuario, id_evento, str(datetime.now()), cadena_encriptada])
+            
+        obtener_datos_resultados.clear() # Limpiar caché para que se vea el cambio
         return True
-    except: return False
+    except Exception as e:
+        print(f"Error guardando: {e}")
+        return False
 
 def guardar_resultado_oficial(fila_datos):
     try:
