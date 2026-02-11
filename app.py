@@ -534,8 +534,19 @@ else:
                     
                     # Obtener la fila del usuario
                     fila_user = df_filtrado[df_filtrado['usuario'] == usuario_a_ver].iloc[-1]
-                    texto_encriptado = fila_user['datos_encriptados']
-                    fecha_apuesta = fila_user['fecha']
+                    
+                    # 1. Recuperar encriptado (Asumimos que esta columna existe si las otras funcionan)
+                    texto_encriptado = fila_user.get('datos_encriptados', '')
+                    
+                    # 2. Recuperar fecha de forma segura (sin importar mayúsculas o si falta)
+                    fecha_apuesta = "Desconocida"
+                    # Buscamos columnas que contengan "fecha", "date" o "time"
+                    cols_fecha = [c for c in fila_user.index if 'fecha' in c.lower() or 'date' in c.lower() or 'time' in c.lower()]
+                    
+                    if cols_fecha:
+                        fecha_apuesta = fila_user[cols_fecha[0]]
+                    elif 'fecha' in fila_user: # Intento directo
+                        fecha_apuesta = fila_user['fecha']
                     
                     texto_plano = desencriptar(texto_encriptado)
                     
