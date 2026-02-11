@@ -1,16 +1,17 @@
 import streamlit as st
 import pandas as pd
 import gspread
-from google.oauth2.service_account import Credentials # MODIFICADO: Nueva librería de auth
+from google.oauth2.service_account import Credentials
 from cryptography.fernet import Fernet
 from datetime import datetime
 import pytz
 import time
+import requests
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="F1 2026 Manager", page_icon="🏎️", layout="wide")
 
-# Lista de Pilotos Oficial
+# Lista de Pilotos Oficial (Para los desplegables de la porra)
 PILOTOS_2026 = [
     "Verstappen", "Hadjar", "Leclerc", "Hamilton", "Norris", "Piastri", 
     "Alonso", "Stroll", "Sainz", "Albon", "Russell", "Antonelli", 
@@ -30,9 +31,8 @@ if 'mis_ligas' not in st.session_state:
 if 'mi_liga' not in st.session_state:
     st.session_state.mi_liga = ""
 
-# --- CONEXIONES (MODIFICADO) ---
+# --- CONEXIONES GOOGLE SHEETS ---
 def conectar_sheet():
-    """Conexión actualizada usando google-auth y google-auth-oauthlib"""
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive"
@@ -57,7 +57,94 @@ def desencriptar(texto_encriptado):
     except:
         return "Error/Corrupto"
 
-# --- FUNCIONES DE LECTURA OPTIMIZADAS (CACHÉ) ---
+# --- FUNCIONES API F1 (OPENF1) ---
+@st.cache_data(ttl=600)
+def obtener_lista_sesiones_finalizadas():
+    """Devuelve una lista de diccionarios con las sesiones ya terminadas."""
+    try:
+        # NOTA: Cambia 'year=2023' por 'year=2026' cuando empiece la temporada real.
+        # Usamos 2023/2024 para que veas datos ahora mismo.
+        url = "https://api.openf1.org/v1/sessions?year=2023" 
+        resp = requests.get(url)
+        if resp.status_code != 200: return []
+        
+        sessions = resp.json()
+        now = datetime.now(pytz.utc)
+        finalizadas = []
+        
+        for s in sessions:
+            try:
+                end_time = datetime.fromisoformat(s['date_end']).replace(tzinfo=pytz.utc)
+                if end_time < now:
+                    label = f"{s['country_name']} - {s['session_name']}"
+                    finalizadas.append({
+                        "label": label,
+                        "key": s['session_key'],
+                        "type": s['session_type'],
+                        "date": end_time
+                    })
+            except: pass
+            
+        # Ordenamos: La más reciente primero
+        finalizadas.sort(key=lambda x: x['date'], reverse=True)
+        return finalizadas
+    except: return []
+
+@st.cache_data(ttl=600)
+def obtener_detalles_sesion(session_key, session_type):
+    """Busca tiempos y mapea nombres de pilotos."""
+    try:
+        # 1. Mapa de Pilotos (Dorsal -> Nombre)
+        url_drivers = f"https://api.openf1.org/v1/drivers?session_key={session_key}"
+        drivers_resp = requests.get(url_drivers)
+        mapa_pilotos = {}
+        if drivers_resp.status_code == 200:
+            for d in drivers_resp.json():
+                if d['driver_number']:
+                    mapa_pilotos[d['driver_number']] = d['last_name'].upper()
+
+        # 2. Obtener Resultados
+        resultados = []
+        
+        if session_type == 'Race':
+            url_pos = f"https://api.openf1.org/v1/position?session_key={session_key}"
+            pos_data = requests.get(url_pos).json()
+            df_pos = pd.DataFrame(pos_data)
+            
+            if not df_pos.empty:
+                df_pos['date'] = pd.to_datetime(df_pos['date'])
+                # Última posición conocida de cada piloto
+                final_positions = df_pos.sort_values('date').drop_duplicates(subset=['driver_number'], keep='last')
+                final_positions = final_positions.sort_values('position')
+                
+                for _, row in final_positions.iterrows():
+                    num = row['driver_number']
+                    nombre = mapa_pilotos.get(num, f"#{num}")
+                    resultados.append({"Pos": row['position'], "Piloto": nombre, "Dato": "Final"})
+        else:
+            # Libres y Clasificación (Mejor Vuelta)
+            url_laps = f"https://api.openf1.org/v1/laps?session_key={session_key}"
+            laps_data = requests.get(url_laps).json()
+            df_laps = pd.DataFrame(laps_data)
+            
+            if not df_laps.empty:
+                df_laps = df_laps.dropna(subset=['lap_duration'])
+                best_laps = df_laps.loc[df_laps.groupby('driver_number')['lap_duration'].idxmin()]
+                best_laps = best_laps.sort_values('lap_duration')
+                
+                pos_counter = 1
+                for _, row in best_laps.iterrows():
+                    num = row['driver_number']
+                    nombre = mapa_pilotos.get(num, f"#{num}")
+                    tiempo = f"{row['lap_duration']:.3f}"
+                    resultados.append({"Pos": pos_counter, "Piloto": nombre, "Dato": tiempo})
+                    pos_counter += 1
+                    
+        return resultados
+    except Exception as e:
+        return []
+
+# --- FUNCIONES DE LECTURA DE BASE DE DATOS (CACHÉ) ---
 @st.cache_data(ttl=300)
 def obtener_datos_maestros():
     """Descarga Calendario y Usuarios (5 min caché)"""
@@ -339,8 +426,7 @@ else:
 
     st.title("🏆 Porra F1 2026")
 
-    # MODIFICADO: Lista de pestañas incluyendo "👀 Ver Apuestas"
-    tabs_list = ["📝 Hacer Porra", "📊 Clasificación", "👀 Ver Apuestas", "📜 Normas"]
+    tabs_list = ["📝 Hacer Porra", "📊 Clasificación", "👀 Ver Apuestas", "📡 Live Center", "📜 Normas"]
     if st.session_state.rol_usuario == "admin":
         tabs_list.append("⚙️ Resultados")
         tabs_list.append("👥 Usuarios")
@@ -361,7 +447,7 @@ else:
         id_evento = row_evento['id_evento']
         estado = verificar_estado_evento(id_evento, df_cal)
         
-        # --- CARGAR APUESTA ANTERIOR (Solo para visualizar) ---
+        # --- CARGAR APUESTA ANTERIOR ---
         _, df_bets_c, df_bets_m = obtener_datos_resultados()
         mi_apuesta_actual = []
         es_mundial = "mundial" in id_evento
@@ -484,16 +570,14 @@ else:
             with col2: st.dataframe(df_rank, use_container_width=True)
         else: st.info("Sin datos aún.")
 
-    # --- TAB 3: VER APUESTAS (NUEVO) ---
+    # --- TAB 3: VER APUESTAS (Con seguridad de errores) ---
     with tabs[2]:
         st.header("🕵️ Espiar Rivales")
         st.info("Aquí podrás ver las apuestas detalladas de otros jugadores una vez cerrado el evento.")
 
-        # 1. Selector de Evento
         lista_eventos = df_cal['nombre_mostrar'].tolist()
         evento_spy = st.selectbox("Selecciona Gran Premio:", lista_eventos, key="spy_event")
         
-        # Obtener ID y estado
         row_evento = df_cal[df_cal['nombre_mostrar'] == evento_spy].iloc[0]
         id_evento = row_evento['id_evento']
         estado_evento = verificar_estado_evento(id_evento, df_cal)
@@ -502,11 +586,9 @@ else:
             st.warning(f"🔒 Las apuestas para **{evento_spy}** son secretas hasta que cierre el evento.")
             st.caption(f"Cierre previsto: {row_evento['fecha_limite']}")
         else:
-            # 2. Cargar datos necesarios
             _, df_bets_c, df_bets_m = obtener_datos_resultados()
             es_mundial = "mundial" in id_evento
             
-            # Filtrar apuestas de este evento específico
             if es_mundial:
                 if df_bets_m.empty: df_filtrado = pd.DataFrame(columns=['usuario'])
                 else: df_filtrado = df_bets_m[df_bets_m['tipo'] == id_evento]
@@ -514,62 +596,85 @@ else:
                 if df_bets_c.empty: df_filtrado = pd.DataFrame(columns=['usuario'])
                 else: df_filtrado = df_bets_c[df_bets_c['carrera'] == id_evento]
             
-            # Obtener lista de usuarios que han apostado en este evento
             if not df_filtrado.empty:
                 usuarios_con_apuesta = df_filtrado['usuario'].unique().tolist()
                 usuarios_con_apuesta.sort()
-            else:
-                usuarios_con_apuesta = []
+            else: usuarios_con_apuesta = []
 
-            # 3. Selector de Usuario (Filtro obligatorio para evitar carga masiva)
             if not usuarios_con_apuesta:
                 st.warning("Nadie ha apostado en este evento todavía.")
             else:
-                usuario_a_ver = st.selectbox("🔍 Selecciona un usuario para ver su jugada:", 
-                                            ["- Seleccionar -"] + usuarios_con_apuesta)
+                usuario_a_ver = st.selectbox("🔍 Selecciona un usuario:", ["- Seleccionar -"] + usuarios_con_apuesta)
 
                 if usuario_a_ver != "- Seleccionar -":
                     st.divider()
                     st.markdown(f"#### 📑 Apuesta de: **{usuario_a_ver}**")
                     
-                    # Obtener la fila del usuario
                     fila_user = df_filtrado[df_filtrado['usuario'] == usuario_a_ver].iloc[-1]
                     
-                    # 1. Recuperar encriptado (Asumimos que esta columna existe si las otras funcionan)
-                    texto_encriptado = fila_user.get('datos_encriptados', '')
-                    
-                    # 2. Recuperar fecha de forma segura (sin importar mayúsculas o si falta)
+                    # Recuperación segura de FECHA
                     fecha_apuesta = "Desconocida"
-                    # Buscamos columnas que contengan "fecha", "date" o "time"
-                    cols_fecha = [c for c in fila_user.index if 'fecha' in c.lower() or 'date' in c.lower() or 'time' in c.lower()]
+                    cols_fecha = [c for c in fila_user.index if 'fecha' in str(c).lower() or 'date' in str(c).lower()]
+                    if cols_fecha: fecha_apuesta = fila_user[cols_fecha[0]]
+                    elif 'fecha' in fila_user: fecha_apuesta = fila_user['fecha']
                     
-                    if cols_fecha:
-                        fecha_apuesta = fila_user[cols_fecha[0]]
-                    elif 'fecha' in fila_user: # Intento directo
-                        fecha_apuesta = fila_user['fecha']
-                    
+                    # Recuperación segura de ENCRIPTADO
+                    texto_encriptado = fila_user.get('datos_encriptados', '')
+                    if not texto_encriptado: texto_encriptado = fila_user.iloc[-1] # Fallback por posición
+
                     texto_plano = desencriptar(texto_encriptado)
                     
                     if texto_plano == "Error/Corrupto":
                         st.error("Error al desencriptar la apuesta.")
                     else:
                         lista_pilotos = texto_plano.split(",")
-                        
-                        # Visualización
                         col_dat, col_tab = st.columns([1, 3])
                         with col_dat:
                             st.caption("📅 Fecha envío:")
                             st.write(fecha_apuesta)
                             st.caption("📍 Evento:")
                             st.write(evento_spy)
-                        
                         with col_tab:
                             df_show = pd.DataFrame(lista_pilotos, columns=["Piloto"])
                             df_show.index += 1
                             st.dataframe(df_show, use_container_width=True, height=400)
 
-    # --- TAB 4: NORMAS ---
+    # --- TAB 4: LIVE CENTER (Nueva) ---
     with tabs[3]:
+        st.header("📡 Live Center F1")
+        st.info("Consulta resultados de sesiones anteriores (Libres, Clasificación, etc) usando la API OpenF1.")
+        
+        if st.button("🔄 Buscar nuevas sesiones"):
+            obtener_lista_sesiones_finalizadas.clear()
+            st.rerun()
+
+        lista_sesiones = obtener_lista_sesiones_finalizadas()
+        
+        if not lista_sesiones:
+            st.warning("No hay sesiones finalizadas disponibles en la API.")
+        else:
+            opciones_nombres = [s['label'] for s in lista_sesiones]
+            seleccion = st.selectbox("📅 Selecciona Sesión:", opciones_nombres, index=0)
+            sesion_elegida = next(s for s in lista_sesiones if s['label'] == seleccion)
+            
+            st.divider()
+            st.subheader(f"Resultados: {sesion_elegida['label']}")
+            
+            with st.spinner("Descargando telemetría..."):
+                datos = obtener_detalles_sesion(sesion_elegida['key'], sesion_elegida['type'])
+            
+            if datos:
+                df_show = pd.DataFrame(datos)
+                st.dataframe(
+                    df_show.set_index("Pos"), 
+                    use_container_width=True,
+                    height=500
+                )
+            else:
+                st.warning("Sesión encontrada, pero no hay datos de tiempos disponibles.")
+
+    # --- TAB 5: NORMAS ---
+    with tabs[4]:
         st.header("📜 Reglamento Oficial")
         st.markdown("""
         ### 1. Formato
@@ -587,9 +692,9 @@ else:
         * **10 pts**: Posición +/- 1.
         """)
 
-    # --- TAB 5: ADMIN RESULTADOS ---
+    # --- TABS ADMIN ---
     if st.session_state.rol_usuario == "admin":
-        with tabs[4]:
+        with tabs[5]:
             st.markdown("### ⚙️ Panel Resultados")
             ev_cargar = st.selectbox("Evento:", df_cal['id_evento'].tolist())
             res_admin = st.multiselect("Resultado Oficial:", PILOTOS_2026)
@@ -601,9 +706,7 @@ else:
                 if ok: st.success("Guardado")
                 else: st.error("Error al guardar")
 
-    # --- TAB 6: ADMIN USUARIOS ---
-    if st.session_state.rol_usuario == "admin":
-        with tabs[5]:
+        with tabs[6]:
             st.markdown("### 👥 Control de Acceso")
             if st.button("🔄 Cargar Pendientes"):
                 obtener_datos_maestros.clear()
