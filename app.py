@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2.service_account import Credentials # MODIFICADO: Nueva librería de auth
 from cryptography.fernet import Fernet
 from datetime import datetime
 import pytz
@@ -30,11 +30,16 @@ if 'mis_ligas' not in st.session_state:
 if 'mi_liga' not in st.session_state:
     st.session_state.mi_liga = ""
 
-# --- CONEXIONES ---
+# --- CONEXIONES (MODIFICADO) ---
 def conectar_sheet():
-    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+    """Conexión actualizada usando google-auth y google-auth-oauthlib"""
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive"
+    ]
+    
     creds_dict = st.secrets["gcp_service_account"]
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
     client = gspread.authorize(creds)
     return client.open("Base de Datos F1 2026")
 
@@ -334,7 +339,8 @@ else:
 
     st.title("🏆 Porra F1 2026")
 
-    tabs_list = ["📝 Hacer Porra", "📊 Clasificación", "📜 Normas"]
+    # MODIFICADO: Lista de pestañas incluyendo "👀 Ver Apuestas"
+    tabs_list = ["📝 Hacer Porra", "📊 Clasificación", "👀 Ver Apuestas", "📜 Normas"]
     if st.session_state.rol_usuario == "admin":
         tabs_list.append("⚙️ Resultados")
         tabs_list.append("👥 Usuarios")
@@ -389,7 +395,6 @@ else:
             st.success(f"🟢 ABIERTO hasta: {row_evento['fecha_limite']}")
             if es_mundial:
                 st.write("Ordena los 22 pilotos.")
-                # default=None para que aparezca vacío y obligue a rellenar
                 seleccion = st.multiselect("Parrilla:", PILOTOS_2026, default=None)
                 
                 if len(seleccion) == 22:
@@ -406,7 +411,6 @@ else:
                 seleccion_carrera = []
                 for i in range(10):
                     with cols[i % 2]:
-                        # index=0 para que aparezca "-"
                         val = st.selectbox(f"P{i+1}", ["-"] + PILOTOS_2026, index=0, key=f"p{i}")
                         seleccion_carrera.append(val)
                 if "-" not in seleccion_carrera and len(set(seleccion_carrera)) == 10:
@@ -457,23 +461,6 @@ else:
 
                 with st.expander(f"🏁 Detalles: {carrera_id}"):
                     st.dataframe(pd.DataFrame(res_gp), use_container_width=True)
-                    if apuestas_del_gp:
-                        st.caption("🕵️ Ver apuesta completa de:")
-                        usuarios_en_gp = list(apuestas_del_gp.keys())
-                        usuario_a_espiar = st.selectbox("Seleccionar:", ["-"] + usuarios_en_gp, key=f"spy_{carrera_id}")
-                        if usuario_a_espiar != "-":
-                            st.markdown(f"**Apuesta de {usuario_a_espiar}**")
-                            lista_apostada = apuestas_del_gp[usuario_a_espiar]
-                            data_comp = []
-                            rango = 22 if es_mundial else 10
-                            for i in range(rango):
-                                p_apostado = lista_apostada[i] if i < len(lista_apostada) else "-"
-                                p_real = res_oficial[i] if i < len(res_oficial) else "-"
-                                icon = "❌"
-                                if p_apostado == p_real: icon = "✅"
-                                elif p_apostado in res_oficial: icon = "⚠️"
-                                data_comp.append({"Pos": i+1, "Apuesta": p_apostado, "Real": p_real, "Estado": icon})
-                            st.dataframe(pd.DataFrame(data_comp), use_container_width=True)
 
         st.write("---")
         opciones = ["GLOBAL"] + st.session_state.mis_ligas
@@ -497,8 +484,81 @@ else:
             with col2: st.dataframe(df_rank, use_container_width=True)
         else: st.info("Sin datos aún.")
 
-    # --- TAB 3: NORMAS ---
+    # --- TAB 3: VER APUESTAS (NUEVO) ---
     with tabs[2]:
+        st.header("🕵️ Espiar Rivales")
+        st.info("Aquí podrás ver las apuestas detalladas de otros jugadores una vez cerrado el evento.")
+
+        # 1. Selector de Evento
+        lista_eventos = df_cal['nombre_mostrar'].tolist()
+        evento_spy = st.selectbox("Selecciona Gran Premio:", lista_eventos, key="spy_event")
+        
+        # Obtener ID y estado
+        row_evento = df_cal[df_cal['nombre_mostrar'] == evento_spy].iloc[0]
+        id_evento = row_evento['id_evento']
+        estado_evento = verificar_estado_evento(id_evento, df_cal)
+
+        if estado_evento != "CERRADO":
+            st.warning(f"🔒 Las apuestas para **{evento_spy}** son secretas hasta que cierre el evento.")
+            st.caption(f"Cierre previsto: {row_evento['fecha_limite']}")
+        else:
+            # 2. Cargar datos necesarios
+            _, df_bets_c, df_bets_m = obtener_datos_resultados()
+            es_mundial = "mundial" in id_evento
+            
+            # Filtrar apuestas de este evento específico
+            if es_mundial:
+                if df_bets_m.empty: df_filtrado = pd.DataFrame(columns=['usuario'])
+                else: df_filtrado = df_bets_m[df_bets_m['tipo'] == id_evento]
+            else:
+                if df_bets_c.empty: df_filtrado = pd.DataFrame(columns=['usuario'])
+                else: df_filtrado = df_bets_c[df_bets_c['carrera'] == id_evento]
+            
+            # Obtener lista de usuarios que han apostado en este evento
+            if not df_filtrado.empty:
+                usuarios_con_apuesta = df_filtrado['usuario'].unique().tolist()
+                usuarios_con_apuesta.sort()
+            else:
+                usuarios_con_apuesta = []
+
+            # 3. Selector de Usuario (Filtro obligatorio para evitar carga masiva)
+            if not usuarios_con_apuesta:
+                st.warning("Nadie ha apostado en este evento todavía.")
+            else:
+                usuario_a_ver = st.selectbox("🔍 Selecciona un usuario para ver su jugada:", 
+                                            ["- Seleccionar -"] + usuarios_con_apuesta)
+
+                if usuario_a_ver != "- Seleccionar -":
+                    st.divider()
+                    st.markdown(f"#### 📑 Apuesta de: **{usuario_a_ver}**")
+                    
+                    # Obtener la fila del usuario
+                    fila_user = df_filtrado[df_filtrado['usuario'] == usuario_a_ver].iloc[-1]
+                    texto_encriptado = fila_user['datos_encriptados']
+                    fecha_apuesta = fila_user['fecha']
+                    
+                    texto_plano = desencriptar(texto_encriptado)
+                    
+                    if texto_plano == "Error/Corrupto":
+                        st.error("Error al desencriptar la apuesta.")
+                    else:
+                        lista_pilotos = texto_plano.split(",")
+                        
+                        # Visualización
+                        col_dat, col_tab = st.columns([1, 3])
+                        with col_dat:
+                            st.caption("📅 Fecha envío:")
+                            st.write(fecha_apuesta)
+                            st.caption("📍 Evento:")
+                            st.write(evento_spy)
+                        
+                        with col_tab:
+                            df_show = pd.DataFrame(lista_pilotos, columns=["Piloto"])
+                            df_show.index += 1
+                            st.dataframe(df_show, use_container_width=True, height=400)
+
+    # --- TAB 4: NORMAS ---
+    with tabs[3]:
         st.header("📜 Reglamento Oficial")
         st.markdown("""
         ### 1. Formato
@@ -516,9 +576,9 @@ else:
         * **10 pts**: Posición +/- 1.
         """)
 
-    # --- TAB 4: ADMIN RESULTADOS ---
+    # --- TAB 5: ADMIN RESULTADOS ---
     if st.session_state.rol_usuario == "admin":
-        with tabs[3]:
+        with tabs[4]:
             st.markdown("### ⚙️ Panel Resultados")
             ev_cargar = st.selectbox("Evento:", df_cal['id_evento'].tolist())
             res_admin = st.multiselect("Resultado Oficial:", PILOTOS_2026)
@@ -530,9 +590,9 @@ else:
                 if ok: st.success("Guardado")
                 else: st.error("Error al guardar")
 
-    # --- TAB 5: ADMIN USUARIOS ---
+    # --- TAB 6: ADMIN USUARIOS ---
     if st.session_state.rol_usuario == "admin":
-        with tabs[4]:
+        with tabs[5]:
             st.markdown("### 👥 Control de Acceso")
             if st.button("🔄 Cargar Pendientes"):
                 obtener_datos_maestros.clear()
