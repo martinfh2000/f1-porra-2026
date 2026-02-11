@@ -7,7 +7,7 @@ import pytz
 HEADERS = {'User-Agent': 'Mozilla/5.0 (App Porra F1)'}
 
 @st.cache_data(ttl=600)
-def obtener_lista_sesiones_finalizadas(year=2025):
+def obtener_lista_sesiones_finalizadas(year=2026):
     """Obtiene Carreras y Clasificaciones (Ignorando Sprints)."""
     url = f"https://api.jolpi.ca/ergast/f1/{year}.json"
     try:
@@ -107,4 +107,5 @@ def obtener_clasificacion_mundial(year, mapa_numeros):
                     "Victorias": int(d['wins'])
                 })
         return tabla
+
     except: return []
