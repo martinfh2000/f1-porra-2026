@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import time
+from streamlit_sortables import sort_items
 
 # --- IMPORTAMOS MÓDULOS PROPIOS ---
 from utils.auth import encriptar, desencriptar
@@ -124,10 +125,29 @@ else:
         if est != "ABIERTO": st.warning(f"🔒 {est}")
         else:
             if es_mundial:
-                s = st.multiselect("Ordena los 22 pilotos:", PILOTOS_LISTA, default=prev if prev else None)
-                if st.button("Guardar Mundial") and len(s)==22: 
-                    guardar_apuesta(st.session_state.usuario_actual, ide, encriptar(",".join(s)), "mundial")
-                    st.balloons(); st.success("Guardado")
+                st.subheader("🏆 Ordena el Mundial de Pilotos")
+                st.info("Arrastra y suelta los nombres para ordenar tu predicción.")
+
+                # 1. Definimos el orden inicial (Tu apuesta guardada o la lista por defecto)
+                # Nos aseguramos de que estén todos los pilotos (por si acaso cambió la lista)
+                if prev and len(prev) == len(PILOTOS_LISTA):
+                    default_items = prev
+                else:
+                    default_items = PILOTOS_LISTA
+
+                # 2. WIDGET DE ARRASTRAR Y SOLTAR
+                # Esto crea una lista vertical ordenable
+                orden_final = sort_items(default_items, direction='vertical')
+
+                # 3. GUARDAR
+                if st.button("Guardar Predicción Mundial", type="primary"):
+                    # Verificamos que no se haya perdido ningún piloto (seguridad)
+                    if len(orden_final) == len(PILOTOS_LISTA):
+                        guardar_apuesta(st.session_state.usuario_actual, ide, encriptar(",".join(orden_final)), "mundial")
+                        st.balloons()
+                        st.success("✅ ¡Orden guardado correctamente!")
+                    else:
+                        st.error("Error: Faltan pilotos en la lista.")
             else:
                 st.write("Top 10 Carrera (Domingo)")
                 cols = st.columns(2); sc = []
@@ -250,5 +270,4 @@ else:
                     c1,c2,c3,c4 = st.columns([2,2,1,1])
                     c1.write(r['usuario']); c2.caption(r['liga_privada'])
                     if c3.button("✅", key=f"ok_{r['usuario']}"): aprobar_usuario(r['usuario']); st.rerun()
-
                     if c4.button("❌", key=f"no_{r['usuario']}"): borrar_usuario(r['usuario']); st.rerun()
