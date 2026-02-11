@@ -107,5 +107,4 @@ def obtener_clasificacion_mundial(year, mapa_numeros):
                     "Victorias": int(d['wins'])
                 })
         return tabla
-
     except: return []

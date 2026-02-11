@@ -197,7 +197,7 @@ else:
         t_ses, t_mun = st.tabs(["🏁 Sesiones (Carrera/Qualy)", "🏆 Mundial"])
         with t_ses:
             if st.button("Buscar"): obtener_lista_sesiones_finalizadas.clear(); st.rerun()
-            sess = obtener_lista_sesiones_finalizadas(2025) 
+            sess = obtener_lista_sesiones_finalizadas(2026) 
             if sess:
                 # Aquí saldrán tanto Carreras como Clasificaciones (pero no Sprints)
                 s = st.selectbox("Sesión:", [x['label'] for x in sess])
@@ -210,7 +210,7 @@ else:
             else: st.warning("Sin datos.")
         with t_mun:
             if st.button("Actualizar"): obtener_clasificacion_mundial.clear(); st.rerun()
-            md = obtener_clasificacion_mundial(2025, MAPA_NUMEROS)
+            md = obtener_clasificacion_mundial(2026, MAPA_NUMEROS)
             if md:
                 df_m = pd.DataFrame(md)
                 st.dataframe(df_m.set_index("Pos"), use_container_width=True, height=600, column_config={"Puntos": st.column_config.ProgressColumn("Puntos", format="%d", min_value=0, max_value=int(df_m['Puntos'].max()))})
@@ -227,8 +227,8 @@ else:
             
             c1, c2 = st.columns([1,2])
             with c1:
-                if st.button("📥 Importar API (2025)"):
-                    res_api = importar_resultado_carrera_api(idx+1, 2025, MAPA_NUMEROS)
+                if st.button("📥 Importar API (2026)"):
+                    res_api = importar_resultado_carrera_api(idx+1, 2026, MAPA_NUMEROS)
                     if res_api: st.session_state.temp_res = res_api; st.success(f"{len(res_api)} OK")
                     else: st.error("Error API")
             with c2:
