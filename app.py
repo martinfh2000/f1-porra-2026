@@ -64,7 +64,7 @@ def obtener_lista_sesiones_finalizadas():
     try:
         # NOTA: Cambia 'year=2023' por 'year=2026' cuando empiece la temporada real.
         # Usamos 2023/2024 para que veas datos ahora mismo.
-        url = "https://api.openf1.org/v1/sessions?year=2023" 
+        url = "https://api.openf1.org/v1/sessions?year=2025" 
         resp = requests.get(url)
         if resp.status_code != 200: return []
         
@@ -721,4 +721,5 @@ else:
                     if c3.button("✅", key=f"ok_{row['usuario']}"):
                         aprobar_usuario(row['usuario']); st.rerun()
                     if c4.button("❌", key=f"del_{row['usuario']}"):
+
                         borrar_usuario(row['usuario']); st.rerun()
