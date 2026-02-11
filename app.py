@@ -94,7 +94,7 @@ else:
             st.rerun()
 
     st.title("🏆 Porra F1")
-    tn = ["📝 Porra", "📊 Ranking", "👀 Espiar", "📡 Live Center", "📜 Normas"]
+    tn = ["📝 Porra", "📊 Ranking", "👀 Apuestas", "📡 Live Center", "📜 Normas"]
     if st.session_state.rol_usuario == "admin": tn.extend(["⚙️ Admin Resultados", "👥 Admin Usuarios"])
     tabs = st.tabs(tn)
 
@@ -170,7 +170,7 @@ else:
 
     # --- TAB 3: ESPIAR (SIN FECHA) ---
     with tabs[2]:
-        st.header("🕵️ Espiar")
+        st.header("🕵️ Apuestas")
         spy_ev = st.selectbox("Evento:", df_cal['nombre_mostrar'].tolist(), key="spy")
         row_spy = df_cal[df_cal['nombre_mostrar'] == spy_ev].iloc[0]
         id_spy = row_spy['id_evento']
@@ -250,4 +250,5 @@ else:
                     c1,c2,c3,c4 = st.columns([2,2,1,1])
                     c1.write(r['usuario']); c2.caption(r['liga_privada'])
                     if c3.button("✅", key=f"ok_{r['usuario']}"): aprobar_usuario(r['usuario']); st.rerun()
+
                     if c4.button("❌", key=f"no_{r['usuario']}"): borrar_usuario(r['usuario']); st.rerun()
