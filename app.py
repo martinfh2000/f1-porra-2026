@@ -236,7 +236,26 @@ else:
                 st.dataframe(df_m.set_index("Pos"), use_container_width=True, height=600, column_config={"Puntos": st.column_config.ProgressColumn("Puntos", format="%d", min_value=0, max_value=int(df_m['Puntos'].max()))})
 
     # --- TAB 5: NORMAS ---
-    with tabs[4]: st.markdown("### Normas\n4pts acierto, 2pts podio, 1pt top10.")
+    with tabs[4]:
+        st.markdown("## 📜 Reglamento Oficial F1 2026")
+        
+        st.markdown("""
+        ### 🏎️ 1. Pronósticos de Carrera (Top 10)
+        Solo puntúan los pilotos que coloques dentro de tu Top 10 para la carrera del domingo.
+        * **4 Puntos:** Acierto de la posición **exacta** del piloto.
+        * **2 Puntos:** El piloto acaba en el **Podio (Top 3)**, lo pusiste en el Top 3, pero fallaste su posición exacta.
+        * **1 Punto:** El piloto acaba en la zona de puntos (**Top 10**), lo pusiste en tu Top 10, pero fallaste su posición exacta.
+        *(Nota: La clasificación del sábado no reparte puntos, solo sirve para desempatar o ver tiempos en el Live Center).*
+
+        ### 🏆 2. Pronóstico del Mundial
+        Predicción de la clasificación final de los 22 pilotos al terminar la temporada.
+        * **30 Puntos:** Acertar la posición **exacta** de un piloto.
+        * **10 Puntos:** Fallar por **1 sola posición** (ej. pones a un piloto 3º y termina 2º o 4º).
+
+        ### ⏱️ 3. Cierres y Privacidad
+        * **Bloqueo:** Las porras de cada Gran Premio se cierran automáticamente a la hora oficial de inicio de la sesión.
+        * **Ver Apuestas:** Las apuestas de los demás jugadores están encriptadas y son **completamente secretas**. Solo podrás verlas en la pestaña "Ver Apuestas" una vez que el evento haya cambiado a estado "CERRADO".
+        """)
 
     # --- TAB 6: ADMIN RESULTADOS ---
     if st.session_state.rol_usuario == "admin":
