@@ -245,8 +245,7 @@ else:
         * **4 Puntos:** Acierto de la posición **exacta** del piloto.
         * **2 Puntos:** El piloto acaba en el **Podio (Top 3)**, lo pusiste en el Top 3, pero fallaste su posición exacta.
         * **1 Punto:** El piloto acaba en la zona de puntos (**Top 10**), lo pusiste en tu Top 10, pero fallaste su posición exacta.
-        *(Nota: La clasificación del sábado no reparte puntos, solo sirve para desempatar o ver tiempos en el Live Center).*
-
+        
         ### 🏆 2. Pronóstico del Mundial
         Predicción de la clasificación final de los 22 pilotos al terminar la temporada.
         * **30 Puntos:** Acertar la posición **exacta** de un piloto.
@@ -289,4 +288,5 @@ else:
                     c1,c2,c3,c4 = st.columns([2,2,1,1])
                     c1.write(r['usuario']); c2.caption(r['liga_privada'])
                     if c3.button("✅", key=f"ok_{r['usuario']}"): aprobar_usuario(r['usuario']); st.rerun()
+
                     if c4.button("❌", key=f"no_{r['usuario']}"): borrar_usuario(r['usuario']); st.rerun()
