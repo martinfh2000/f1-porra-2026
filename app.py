@@ -226,7 +226,11 @@ else:
                 with st.spinner("Cargando resultados..."):
                     res = obtener_detalles_sesion(obj['round'], obj['year'], obj['type'])
                 
-                st.dataframe(pd.DataFrame(res).set_index("Pos"), use_container_width=True)
+                # CONDICIONAL DE SEGURIDAD: Solo pintamos la tabla si hay datos
+                if res:
+                    st.dataframe(pd.DataFrame(res).set_index("Pos"), use_container_width=True)
+                else:
+                    st.info("⏳ Los resultados detallados aún no están disponibles en la base de datos oficial. Inténtalo más tarde.")
             else: st.warning("Sin datos.")
         with t_mun:
             if st.button("Actualizar"): obtener_clasificacion_mundial.clear(); st.rerun()
@@ -290,3 +294,4 @@ else:
                     if c3.button("✅", key=f"ok_{r['usuario']}"): aprobar_usuario(r['usuario']); st.rerun()
 
                     if c4.button("❌", key=f"no_{r['usuario']}"): borrar_usuario(r['usuario']); st.rerun()
+
