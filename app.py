@@ -186,6 +186,10 @@ else:
             if lig != "GLOBAL":
                 usl = [u['usuario'] for _, u in df_users.iterrows() if lig in str(u['liga_privada'])]
                 rd = rd[rd['Usuario'].isin(usl)]
+
+            rd["Posición"] = range(1, len(rd) + 1)
+            rd = rd.set_index("Posición")
+          
             st.bar_chart(rd.set_index("Usuario")); st.dataframe(rd, use_container_width=True)
 
     # --- TAB 3: ESPIAR (SIN FECHA) ---
